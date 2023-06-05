@@ -1,0 +1,25 @@
+# Configuration for dummy-pm
+# The duration is in the format (amount)[smh],
+# Where s represents seconds, m represents minutes and h represents hours
+# For instance, 15s is 15 seconds.
+
+# dim the screen after a certain amount of time
+dpm_ac_dim_after=never
+dpm_bat_dim_after=5m
+
+# turn off the screen after a certain amount of time
+dpm_ac_dpms_after=never
+dpm_bat_dpms_after=10m
+
+# suspend the computer after a certain amount of time
+dpm_ac_suspend_after=never
+dpm_bat_suspend_after=15m
+
+# These commands are called for dimming, undimming, DPMS and other things
+# They're run in a shell
+dpm_dim_command="brightnessctl --save s 40%"
+dpm_undim_command="brightnessctl --restore"
+dpm_dpms_on_command="wlopm --off eDP-1"
+dpm_dpms_off_command="wlopm --on eDP-1"
+dpm_suspend_command="systemctl suspend"
+dpm_lock_command="swaylock"

@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+
+# dummy-pm: A dead simple power manager that does several things.
+# This file is licensed under MIT; license text is at the end of file.
+
+
+set -euo pipefail
+
+# The path to the PID (and lock) file
+LOCK_FILE_PATH="/tmp/dummypm-lock"
+
+# default configuration
+dpm_ac_dim_after=never
+dpm_bat_dim_after=never
+dpm_ac_dpms_after=never
+dpm_bat_dpms_after=never
+dpm_ac_suspend_after=never
+dpm_bat_suspend_after=never
+dpm_dim_command="brightnessctl --save s 40%"
+dpm_undim_command="brightnessctl --restore"
+dpm_dpms_on_command=":;"
+dpm_dpms_off_command=":;"
+dpm_suspend_command="systemctl suspend"
+dpm_lock_command="swaylock"
+
+# parses time into seconds
+parse_time() {
+	local t="${1%[smhSMH]}"
+	case "$1" in
+		never)
+		echo "-1"
+		;;
+		*s|*S)
+		echo "$t"
+		;;
+		*m|*M)
+		echo "$((t * 60))"
+		;;
+		*h|*H)
+		echo "$((t * 3600))"
+		;;
+		*)
+		echo "error: invalid time format" >&2
+		exit 1
+		;;
+	esac
+}
+
+# generates a timeout event for swayidle
+add_timeout() {
+	local timeout="$1"
+	local action="$2"
+	local resume_action="${3-}"
+
+	if [[ "$timeout" != -1 ]]; then
+		echo "timeout"
+		echo "$timeout"
+		echo "$action"
+		if [[ -n "$resume_action" ]]; then
+			echo "resume"
+			echo "$resume_action"
+		fi
+	fi
+}
+
+# check if the adapter is plugged in
+is_plugged_in() {
+	cat /sys/class/power_supply/ACAD/online 2> /dev/null
+}
+
+# sets up a new swayidle instance
+start_daemon() {
+	local wait_for_daemon
+	local ac_dim_after
+	local bat_dim_after
+	local ac_dpms_after
+	local bat_dpms_after
+	local ac_suspend_after
+	local bat_suspend_after
+	local status_pipe
+
+	wait_for_daemon=${1-}
+	ac_dim_after=$(parse_time "$dpm_ac_dim_after")
+	bat_dim_after=$(parse_time "$dpm_bat_dim_after")
+	ac_dpms_after=$(parse_time "$dpm_ac_dpms_after")
+	bat_dpms_after=$(parse_time "$dpm_bat_dpms_after")
+	ac_suspend_after=$(parse_time "$dpm_ac_suspend_after")
+	bat_suspend_after=$(parse_time "$dpm_bat_suspend_after")
+
+	# we need a fifo to send the exit status from the daemon
+	# since we need to send it to background
+	status_pipe="$(mktemp -u)"
+	mkfifo -m 600 "$status_pipe"
+
+	(
+		set +e
+		flock -n 9
+		status=$?
+		set -e
+
+		echo "$status" > "$status_pipe"
+		if [[ $status != 0 ]]; then exit "$status"; fi
+
+		trap '(set +e; if [[ -n ${pid-} ]]; then kill $pid; fi; rm -f "$LOCK_FILE_PATH") &> /dev/null' EXIT
+		echo "$BASHPID" > "$LOCK_FILE_PATH"
+
+		local acad_state
+		local last_acad_state
+		while :; do
+	
+			acad_state=$(is_plugged_in)
+			if [[ ${last_acad_state:=} != "$acad_state" ]]; then
+
+				last_acad_state=$acad_state
+				if [[ -n ${pid-} ]]; then kill "$pid"; fi
+
+				local events=("lock" "$dpm_lock_command" "before-sleep" "$dpm_lock_command")
+				if [[ $acad_state = 1 ]]; then
+
+					# when plugged in
+					if [[ $ac_dim_after != -1 ]]; then
+						events+=("timeout" "$ac_dim_after" "$dpm_dim_command" "resume" "$dpm_undim_command")
+					fi
+					if [[ $ac_dpms_after != -1 ]]; then
+						events+=("timeout" "$ac_dpms_after" "$dpm_dpms_on_command" "resume" "$dpm_dpms_off_command")
+					fi
+					if [[ $ac_suspend_after != -1 ]]; then
+						events+=("timeout" "$ac_suspend_after" "$dpm_suspend_command")
+					fi
+
+				else
+
+					# when on battery
+					if [[ $bat_dim_after != -1 ]]; then
+						events+=("timeout" "$bat_dim_after" "$dpm_dim_command" "resume" "$dpm_undim_command")
+					fi
+					if [[ $bat_dpms_after != -1 ]]; then
+						events+=("timeout" "$bat_dpms_after" "$dpm_dpms_on_command" "resume" "$dpm_dpms_off_command")
+					fi
+					if [[ $bat_suspend_after != -1 ]]; then
+						events+=("timeout" "$bat_suspend_after" "$dpm_suspend_command")
+					fi
+
+				fi
+
+				swayidle -w "${events[@]}" &> /dev/null &
+				pid=$!
+			fi
+			sleep 1
+
+		done
+	) 9>>"$LOCK_FILE_PATH" &
+
+	read -r child_status < "$status_pipe"
+	rm -f "$status_pipe"
+
+	if [[ -n $wait_for_daemon ]]; then
+		trap 'stop_daemon;' INT TERM HUP EXIT
+		wait
+	fi
+
+	exit "$child_status"
+}
+
+# stops the daemon
+stop_daemon() {
+	set +e
+	local pid
+	pid=$(<"$LOCK_FILE_PATH")
+	if [[ -n $pid ]]; then kill "$pid"; fi
+	set -e
+}
+
+# restarts the daemon
+restart_daemon() {
+	stop_daemon &> /dev/null
+	start_daemon
+}
+
+# get the pid of the daemon (swayidle)
+get_daemon_pid() {
+	cat "$LOCK_FILE_PATH" 2> /dev/null
+}
+
+# shows a help message
+show_help() {
+	echo "${BASH_SOURCE##*/}: A dead simple power manager that does several things."
+	echo
+	echo "Usage: ${BASH_SOURCE##*/} [COMMAND] [COMMAND_OPTIONS]"
+	echo
+	echo "Commands:"
+	echo "start               Starts the daemon."
+	echo "stop                Stops the daemon."
+	echo "restart             Restarts the daemon."
+	echo "getpid              Gets the pid of the daemon."
+	echo "help                Shows this message."
+	echo
+	echo "Options for start:"
+	echo "--foreground, -f    Runs the daemon in foreground."
+	echo
+}
+
+# get a path to user configuration
+get_config_path() {
+	if [[ -n "${DPM_CONFIG_PATH-}" ]]; then
+		echo "$DPM_CONFIG_PATH"
+	elif [[ -n "${XDG_CONFIG_DIR-}" ]] && [[ -f "$XDG_CONFIG_DIR/dummy-pm-config" ]]; then
+		echo "$XDG_CONFIG_DIR/dummy-pm-config"
+	elif [[ -f "$HOME/.config/dummy-pm-config" ]]; then
+		echo "$HOME/.config/dummy-pm-config"
+	else
+		echo "./dummy-pm-config"
+	fi
+}
+
+# main function
+main() {
+	local cmd="${1-}"
+	local foreground=""
+	
+	shift || true
+
+	case "$cmd" in
+		start)
+
+		case "${1-}" in
+			--foreground|-f)
+				foreground=true
+				;;
+			"")
+				;;
+			*)
+				echo "error: unknown option" >&2
+				exit 1
+				;;
+		esac
+		
+		start_daemon $foreground
+
+		;;
+		restart)
+		restart_daemon
+		;;
+		stop)
+		stop_daemon
+		;;
+		getpid)
+		get_daemon_pid
+		;;
+		help|"")
+		show_help
+		exit 0
+		;;
+		*)
+		echo "error: unknown command" >&2
+		exit 1
+		;;
+	esac
+}
+
+# shellcheck source=dummy-pm-config
+source "$(get_config_path)"
+
+main "$@"
+
+
+# MIT License
+# 
+# Copyright (c) 2023 Takase
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
