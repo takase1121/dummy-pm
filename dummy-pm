@@ -22,6 +22,7 @@ dpm_dpms_on_command=":;"
 dpm_dpms_off_command=":;"
 dpm_suspend_command="systemctl suspend"
 dpm_lock_command="swaylock"
+dpm_log_path="/dev/null"
 
 # parses time into seconds
 parse_time() {
@@ -149,7 +150,7 @@ start_daemon() {
 			sleep 1
 
 		done
-	) 9>>"$LOCK_FILE_PATH" &
+	) 9>>"$LOCK_FILE_PATH" 0<&- &> "$dpm_log_path" &
 
 	read -r child_status < "$status_pipe"
 	rm -f "$status_pipe"

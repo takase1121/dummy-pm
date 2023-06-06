@@ -23,3 +23,6 @@ dpm_dpms_on_command="wlopm --off eDP-1"
 dpm_dpms_off_command="wlopm --on eDP-1"
 dpm_suspend_command="systemctl suspend"
 dpm_lock_command="swaylock"
+
+# path to log file
+dpm_log_path="/dev/null"
