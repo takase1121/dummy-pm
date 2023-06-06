@@ -102,7 +102,7 @@ start_daemon() {
 		echo "$status" > "$status_pipe"
 		if [[ $status != 0 ]]; then exit "$status"; fi
 
-		trap '(set +e; if [[ -n ${pid-} ]]; then kill $pid; fi; rm -f "$LOCK_FILE_PATH") &> /dev/null' EXIT
+		trap 'set +e; if [[ -n ${pid-} ]]; then kill $pid; fi; rm -f "$LOCK_FILE_PATH"' EXIT
 		echo "$BASHPID" > "$LOCK_FILE_PATH"
 
 		local acad_state
@@ -144,7 +144,7 @@ start_daemon() {
 
 				fi
 
-				swayidle -w "${events[@]}" &> /dev/null &
+				swayidle -w "${events[@]}" &
 				pid=$!
 			fi
 			sleep 1
