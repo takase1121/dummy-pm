@@ -21,7 +21,7 @@ dpm_undim_command="brightnessctl --restore"
 dpm_dpms_on_command=":;"
 dpm_dpms_off_command=":;"
 dpm_suspend_command="systemctl suspend"
-dpm_lock_command="swaylock"
+dpm_lock_command="swaylock -f"
 dpm_log_path="/dev/null"
 
 # parses time into seconds
